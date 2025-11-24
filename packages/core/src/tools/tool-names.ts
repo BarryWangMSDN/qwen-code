@@ -24,6 +24,7 @@ export const ToolNames = {
   WEB_FETCH: 'web_fetch',
   WEB_SEARCH: 'web_search',
   LS: 'list_directory',
+  READ_ENV_VAR: 'read_env_var',
 } as const;
 
 /**
@@ -46,6 +47,7 @@ export const ToolDisplayNames = {
   WEB_FETCH: 'WebFetch',
   WEB_SEARCH: 'WebSearch',
   LS: 'ListFiles',
+  READ_ENV_VAR: 'ReadEnvVar',
 } as const;
 
 // Migration from old tool names to new tool names

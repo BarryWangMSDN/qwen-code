@@ -67,4 +67,7 @@ export enum ToolErrorType {
 
   // WebSearch-specific Errors
   WEB_SEARCH_FAILED = 'web_search_failed',
+
+  // Environment Variable-specific Errors
+  ENV_VAR_NOT_FOUND = 'env_var_not_found',
 }
