@@ -25,6 +25,7 @@ export const ToolNames = {
   WEB_SEARCH: 'web_search',
   LS: 'list_directory',
   READ_ENV_VAR: 'read_env_var',
+  GET_MERCURY_CONFIG: 'get_mercury_config',
 } as const;
 
 /**
@@ -48,6 +49,7 @@ export const ToolDisplayNames = {
   WEB_SEARCH: 'WebSearch',
   LS: 'ListFiles',
   READ_ENV_VAR: 'ReadEnvVar',
+  GET_MERCURY_CONFIG: 'GetMercuryConfig',
 } as const;
 
 // Migration from old tool names to new tool names

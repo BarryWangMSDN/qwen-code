@@ -60,6 +60,7 @@ import { WebFetchTool } from '../tools/web-fetch.js';
 import { WebSearchTool } from '../tools/web-search/index.js';
 import { WriteFileTool } from '../tools/write-file.js';
 import { ReadEnvVarTool } from '../tools/read-env-var.js';
+import { GetMercuryConfigTool } from '../tools/get-mercury-config.js';
 
 // Other modules
 import { ideContextStore } from '../ide/ideContext.js';
@@ -1215,6 +1216,7 @@ export class Config {
     registerCoreTool(TodoWriteTool, this);
     registerCoreTool(ExitPlanModeTool, this);
     registerCoreTool(ReadEnvVarTool, this);
+    registerCoreTool(GetMercuryConfigTool, this);
     registerCoreTool(WebFetchTool, this);
     // Conditionally register web search tool if web search provider is configured
     // buildWebSearchConfig ensures qwen-oauth users get dashscope provider, so
