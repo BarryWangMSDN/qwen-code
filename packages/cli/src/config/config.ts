@@ -4,13 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {
-  FileFilteringOptions,
-  MCPServerConfig,
-} from '@qwen-code/qwen-code-core';
-import { extensionsCommand } from '../commands/extensions.js';
 import {
   ApprovalMode,
+  AuthType,
   Config,
   DEFAULT_QWEN_EMBEDDING_MODEL,
   DEFAULT_MEMORY_FILE_FILTERING_OPTIONS,
@@ -26,7 +22,12 @@ import {
   Storage,
   InputFormat,
   OutputFormat,
+  SessionService,
+  type ResumedSessionData,
+  type FileFilteringOptions,
+  type MCPServerConfig,
 } from '@qwen-code/qwen-code-core';
+import { extensionsCommand } from '../commands/extensions.js';
 import type { Settings } from './settings.js';
 import yargs, { type Argv } from 'yargs';
 import { hideBin } from 'yargs/helpers';
@@ -129,6 +130,14 @@ export interface CliArgs {
   inputFormat?: string | undefined;
   outputFormat: string | undefined;
   includePartialMessages?: boolean;
+  /** Resume the most recent session for the current project */
+  continue: boolean | undefined;
+  /** Resume a specific session by its ID */
+  resume: string | undefined;
+  maxSessionTurns: number | undefined;
+  coreTools: string[] | undefined;
+  excludeTools: string[] | undefined;
+  authType: string | undefined;
 }
 
 function normalizeOutputFormat(
@@ -396,6 +405,47 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
             'Include partial assistant messages when using stream-json output.',
           default: false,
         })
+        .option('continue', {
+          type: 'boolean',
+          description:
+            'Resume the most recent session for the current project.',
+          default: false,
+        })
+        .option('resume', {
+          type: 'string',
+          description:
+            'Resume a specific session by its ID. Use without an ID to show session picker.',
+        })
+        .option('max-session-turns', {
+          type: 'number',
+          description: 'Maximum number of session turns',
+        })
+        .option('core-tools', {
+          type: 'array',
+          string: true,
+          description: 'Core tool paths',
+          coerce: (tools: string[]) =>
+            tools.flatMap((tool) => tool.split(',').map((t) => t.trim())),
+        })
+        .option('exclude-tools', {
+          type: 'array',
+          string: true,
+          description: 'Tools to exclude',
+          coerce: (tools: string[]) =>
+            tools.flatMap((tool) => tool.split(',').map((t) => t.trim())),
+        })
+        .option('allowed-tools', {
+          type: 'array',
+          string: true,
+          description: 'Tools to allow, will bypass confirmation',
+          coerce: (tools: string[]) =>
+            tools.flatMap((tool) => tool.split(',').map((t) => t.trim())),
+        })
+        .option('auth-type', {
+          type: 'string',
+          choices: [AuthType.USE_OPENAI, AuthType.QWEN_OAUTH],
+          description: 'Authentication type',
+        })
         .deprecateOption(
           'show-memory-usage',
           'Use the "ui.showMemoryUsage" setting in settings.json instead. This flag will be removed in a future version.',
@@ -450,6 +500,9 @@ export async function parseArguments(settings: Settings): Promise<CliArgs> {
             argv['outputFormat'] !== OutputFormat.STREAM_JSON
           ) {
             return '--input-format stream-json requires --output-format stream-json';
+          }
+          if (argv['continue'] && argv['resume']) {
+            return 'Cannot use both --continue and --resume together. Use --continue to resume the latest session, or --resume <sessionId> to resume a specific session.';
           }
           return true;
         }),
@@ -565,7 +618,6 @@ export async function loadCliConfig(
   settings: Settings,
   extensions: Extension[],
   extensionEnablementManager: ExtensionEnablementManager,
-  sessionId: string,
   argv: CliArgs,
   cwd: string = process.cwd(),
 ): Promise<Config> {
@@ -728,8 +780,14 @@ export async function loadCliConfig(
     interactive = false;
   }
   // In non-interactive mode, exclude tools that require a prompt.
+  // However, if stream-json input is used, control can be requested via JSON messages,
+  // so tools should not be excluded in that case.
   const extraExcludes: string[] = [];
-  if (!interactive && !argv.experimentalAcp) {
+  if (
+    !interactive &&
+    !argv.experimentalAcp &&
+    inputFormat !== InputFormat.STREAM_JSON
+  ) {
     switch (approvalMode) {
       case ApprovalMode.PLAN:
       case ApprovalMode.DEFAULT:
@@ -753,6 +811,7 @@ export async function loadCliConfig(
     settings,
     activeExtensions,
     extraExcludes.length > 0 ? extraExcludes : undefined,
+    argv.excludeTools,
   );
   const blockedMcpServers: Array<{ name: string; extensionName: string }> = [];
 
@@ -797,8 +856,33 @@ export async function loadCliConfig(
 
   const vlmSwitchMode =
     argv.vlmSwitchMode || settings.experimental?.vlmSwitchMode;
+
+  let sessionId: string | undefined;
+  let sessionData: ResumedSessionData | undefined;
+
+  if (argv.continue || argv.resume) {
+    const sessionService = new SessionService(cwd);
+    if (argv.continue) {
+      sessionData = await sessionService.loadLastSession();
+      if (sessionData) {
+        sessionId = sessionData.conversation.sessionId;
+      }
+    }
+
+    if (argv.resume) {
+      sessionId = argv.resume;
+      sessionData = await sessionService.loadSession(argv.resume);
+      if (!sessionData) {
+        const message = `No saved session found with ID ${argv.resume}. Run \`qwen --resume\` without an ID to choose from existing sessions.`;
+        console.log(message);
+        process.exit(1);
+      }
+    }
+  }
+
   return new Config({
     sessionId,
+    sessionData,
     embeddingModel: DEFAULT_QWEN_EMBEDDING_MODEL,
     sandbox: sandboxConfig,
     targetDir: cwd,
@@ -808,7 +892,7 @@ export async function loadCliConfig(
     debugMode,
     question,
     fullContext: argv.allFiles || false,
-    coreTools: settings.tools?.core || undefined,
+    coreTools: argv.coreTools || settings.tools?.core || undefined,
     allowedTools: argv.allowedTools || settings.tools?.allowed || undefined,
     excludeTools,
     toolDiscoveryCommand: settings.tools?.discoveryCommand,
@@ -841,13 +925,16 @@ export async function loadCliConfig(
     model: resolvedModel,
     extensionContextFilePaths,
     sessionTokenLimit: settings.model?.sessionTokenLimit ?? -1,
-    maxSessionTurns: settings.model?.maxSessionTurns ?? -1,
+    maxSessionTurns:
+      argv.maxSessionTurns ?? settings.model?.maxSessionTurns ?? -1,
     experimentalZedIntegration: argv.experimentalAcp || false,
     listExtensions: argv.listExtensions || false,
     extensions: allExtensions,
     blockedMcpServers,
     noBrowser: !!process.env['NO_BROWSER'],
-    authType: settings.security?.auth?.selectedType,
+    authType:
+      (argv.authType as AuthType | undefined) ||
+      settings.security?.auth?.selectedType,
     inputFormat,
     outputFormat,
     includePartialMessages,
@@ -955,8 +1042,10 @@ function mergeExcludeTools(
   settings: Settings,
   extensions: Extension[],
   extraExcludes?: string[] | undefined,
+  cliExcludeTools?: string[] | undefined,
 ): string[] {
   const allExcludeTools = new Set([
+    ...(cliExcludeTools || []),
     ...(settings.tools?.exclude || []),
     ...(extraExcludes || []),
   ]);
