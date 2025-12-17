@@ -289,7 +289,7 @@ export interface ConfigParameters {
   contextFileName?: string | string[];
   accessibility?: AccessibilitySettings;
   telemetry?: TelemetrySettings;
-  gitCoAuthor?: GitCoAuthorSettings;
+  gitCoAuthor?: boolean;
   usageStatisticsEnabled?: boolean;
   fileFiltering?: {
     respectGitIgnore?: boolean;
@@ -320,6 +320,7 @@ export interface ConfigParameters {
   generationConfig?: Partial<ContentGeneratorConfig>;
   cliVersion?: string;
   loadMemoryFromIncludeDirectories?: boolean;
+  chatRecording?: boolean;
   // Web search providers
   webSearch?: {
     provider: Array<{
@@ -351,6 +352,7 @@ export interface ConfigParameters {
   skipStartupContext?: boolean;
   sdkMode?: boolean;
   sessionSubagents?: SubagentConfig[];
+  channel?: string;
 }
 
 function normalizeConfigOutputFormat(
@@ -458,6 +460,7 @@ export class Config {
     | undefined;
   private readonly cliVersion?: string;
   private readonly experimentalZedIntegration: boolean = false;
+  private readonly chatRecordingEnabled: boolean;
   private readonly loadMemoryFromIncludeDirectories: boolean = false;
   private readonly webSearch?: {
     provider: Array<{
@@ -487,6 +490,7 @@ export class Config {
   private readonly enableToolOutputTruncation: boolean;
   private readonly eventEmitter?: EventEmitter;
   private readonly useSmartEdit: boolean;
+  private readonly channel: string | undefined;
 
   constructor(params: ConfigParameters) {
     this.sessionId = params.sessionId ?? randomUUID();
@@ -532,9 +536,9 @@ export class Config {
       useCollector: params.telemetry?.useCollector,
     };
     this.gitCoAuthor = {
-      enabled: params.gitCoAuthor?.enabled ?? true,
-      name: params.gitCoAuthor?.name ?? 'Qwen-Coder',
-      email: params.gitCoAuthor?.email ?? 'qwen-coder@alibabacloud.com',
+      enabled: params.gitCoAuthor ?? true,
+      name: 'Qwen-Coder',
+      email: 'qwen-coder@alibabacloud.com',
     };
     this.usageStatisticsEnabled = params.usageStatisticsEnabled ?? true;
 
@@ -572,6 +576,8 @@ export class Config {
       ._generationConfig as ContentGeneratorConfig;
     this.cliVersion = params.cliVersion;
 
+    this.chatRecordingEnabled = params.chatRecording ?? true;
+
     this.loadMemoryFromIncludeDirectories =
       params.loadMemoryFromIncludeDirectories ?? false;
     this.chatCompression = params.chatCompression;
@@ -600,6 +606,7 @@ export class Config {
     this.enableToolOutputTruncation = params.enableToolOutputTruncation ?? true;
     this.useSmartEdit = params.useSmartEdit ?? false;
     this.extensionManagement = params.extensionManagement ?? true;
+    this.channel = params.channel;
     this.storage = new Storage(this.targetDir);
     this.vlmSwitchMode = params.vlmSwitchMode;
     this.inputFormat = params.inputFormat ?? InputFormat.TEXT;
@@ -617,7 +624,9 @@ export class Config {
       setGlobalDispatcher(new ProxyAgent(this.getProxy() as string));
     }
     this.geminiClient = new GeminiClient(this);
-    this.chatRecordingService = new ChatRecordingService(this);
+    this.chatRecordingService = this.chatRecordingEnabled
+      ? new ChatRecordingService(this)
+      : undefined;
   }
 
   /**
@@ -734,10 +743,15 @@ export class Config {
   /**
    * Starts a new session and resets session-scoped services.
    */
-  startNewSession(sessionId?: string): string {
+  startNewSession(
+    sessionId?: string,
+    sessionData?: ResumedSessionData,
+  ): string {
     this.sessionId = sessionId ?? randomUUID();
-    this.sessionData = undefined;
-    this.chatRecordingService = new ChatRecordingService(this);
+    this.sessionData = sessionData;
+    this.chatRecordingService = this.chatRecordingEnabled
+      ? new ChatRecordingService(this)
+      : undefined;
     if (this.initialized) {
       logStartSession(this, new StartSessionEvent(this));
     }
@@ -1146,6 +1160,10 @@ export class Config {
     return this.cliVersion;
   }
 
+  getChannel(): string | undefined {
+    return this.channel;
+  }
+
   /**
    * Get the current FileSystemService
    */
@@ -1262,7 +1280,10 @@ export class Config {
   /**
    * Returns the chat recording service.
    */
-  getChatRecordingService(): ChatRecordingService {
+  getChatRecordingService(): ChatRecordingService | undefined {
+    if (!this.chatRecordingEnabled) {
+      return undefined;
+    }
     if (!this.chatRecordingService) {
       this.chatRecordingService = new ChatRecordingService(this);
     }
